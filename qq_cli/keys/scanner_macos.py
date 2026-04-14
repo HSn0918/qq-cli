@@ -87,10 +87,25 @@ def _resign_qq(app_path: str) -> None:
         )
 
 
+def _refresh_launch_services(app_path: str) -> None:
+    """重签名后刷新 Launch Services 缓存，确保 open 启动的是新签名版本。"""
+    try:
+        subprocess.run(
+            ["/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+             "LaunchServices.framework/Support/lsregister",
+             "-f", app_path],
+            capture_output=True,
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+
 def _ensure_debuggable(app_path: str) -> bool:
     if _has_debug_entitlement(app_path):
         return False
     _resign_qq(app_path)
+    _refresh_launch_services(app_path)
     return True
 
 
@@ -389,8 +404,9 @@ def _extract_runtime_key_via_lldb(
             text=True,
         )
 
-        # 等 LLDB 就绪（简单等一秒），再用 open 启动 QQ，让用户正常登录
-        time.sleep(1)
+        # 等 LLDB 进入 --waitfor 状态再启动 QQ，否则 QQ 进程出现时 LLDB 还没准备好会错过
+        # --waitfor 通常 1-2 秒内就绪，等 3 秒留足余量
+        time.sleep(3)
         subprocess.Popen(["open", qq_app])
 
         try:
