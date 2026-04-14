@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qq-cli"
+version = "0.1.0"
+description = "NTQQ database query CLI for local message archives"
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.1,<9",
+]
+
+[project.scripts]
+qq-cli = "qq_cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]

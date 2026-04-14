@@ -1,0 +1,23 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local state / exports
+decrypted/
+*.db
+*.db-wal
+*.db-shm
+*.material
+
+# Editor files
+.idea/
+.vscode/
