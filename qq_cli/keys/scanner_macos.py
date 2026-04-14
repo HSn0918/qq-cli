@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+import time
 
 
 DEFAULT_TIMEOUT = 120
@@ -344,7 +345,8 @@ def _write_lldb_commands(script_path: str, module_path: str) -> None:
         command script import {module_path}
         breakpoint set -s wrapper.node -n ___lldb_unnamed_symbol372387
         breakpoint command add -F qq_cli_lldb_hook.breakpoint_callback 1
-        run
+        process attach -n QQ --waitfor
+        process continue
         """
     ).strip()
     with open(script_path, "w", encoding="utf-8") as handle:
@@ -360,7 +362,14 @@ def _tail_text(path: str, limit: int = 10) -> str:
     return "".join(lines[-limit:]).strip()
 
 
-def _extract_runtime_key_via_lldb(target_db_dir: str, snapshot_dir: str, qq_exec: str, timeout: int) -> dict:
+def _extract_runtime_key_via_lldb(
+    target_db_dir: str,
+    snapshot_dir: str,
+    qq_app: str,
+    qq_exec: str,
+    timeout: int,
+) -> dict:
+    # 杀掉已有的 QQ 进程（需要重签名时必须重启；auto 时也重启保证断点能在启动期触发）
     _kill_running_qq()
 
     with tempfile.TemporaryDirectory(prefix="qq-cli-lldb-") as work_dir:
@@ -372,29 +381,38 @@ def _extract_runtime_key_via_lldb(target_db_dir: str, snapshot_dir: str, qq_exec
         _write_lldb_callback(module_path, target_db_dir, snapshot_dir, result_path, hits_path)
         _write_lldb_commands(script_path, module_path)
 
+        # LLDB 先启动，用 --waitfor 等待 QQ 进程出现后立刻 attach
+        proc = subprocess.Popen(
+            ["lldb", "--batch", "-s", script_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        # 等 LLDB 就绪（简单等一秒），再用 open 启动 QQ，让用户正常登录
+        time.sleep(1)
+        subprocess.Popen(["open", qq_app])
+
         try:
-            result = subprocess.run(
-                ["lldb", qq_exec, "--batch", "-s", script_path],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
             raise RuntimeError(
                 "等待 QQ 打开用户数据库超时。\n"
-                "请确认 QQ 能正常启动并已登录，然后重试 qq-cli init。"
-            ) from exc
+                "请登录 QQ 后重试 qq-cli init。"
+            )
 
         if os.path.exists(result_path):
             with open(result_path, encoding="utf-8") as handle:
                 payload = json.load(handle)
             payload["snapshot_dir"] = snapshot_dir
-            payload["stdout"] = result.stdout
-            payload["stderr"] = result.stderr
+            payload["stdout"] = stdout
+            payload["stderr"] = stderr
             payload["method"] = "lldb"
             return payload
 
-        combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+        combined = ((stdout or "") + "\n" + (stderr or "")).strip()
         hits_tail = _tail_text(hits_path, limit=8)
         detail = combined[-2000:] if combined else "无"
         raise RuntimeError(
@@ -432,4 +450,4 @@ def extract_runtime_key(
         if strategy == "c_scan":
             raise RuntimeError("C 快速扫描未能从当前 QQ 进程提取到运行时 key。")
 
-    return _extract_runtime_key_via_lldb(target_db_dir, snapshot_dir, qq_exec, timeout)
+    return _extract_runtime_key_via_lldb(target_db_dir, snapshot_dir, qq_app, qq_exec, timeout)
