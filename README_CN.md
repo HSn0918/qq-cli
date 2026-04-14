@@ -9,7 +9,12 @@
 - 自动快照原始数据库
 - 自动导出明文数据库
 
-真实 NTQQ 原始库通常不能直接被 `sqlite3` 打开，需要先参照 QQDecrypt 的流程去掉 1024 字节自定义头，再按 SQLCipher 参数和运行时 `pKey` 导出明文数据库。不同 QQ 版本、不同数据库命中的 `pKey` 长度可能不同，不应再假设固定为 `32` 字节。
+破解/解密相关说明已经单独拆到 [`DECRYPT_CN.md`](./DECRYPT_CN.md)，里面包含：
+
+- `qq-cli init` 的自动抓 key + 自动解密流程
+- `qq-cli decrypt` 的手动解密方式
+- 真实 QQ 客户端验证结果
+- 常见超时与签名问题的排障说明
 
 当前版本直接读取以下数据库：
 
@@ -88,46 +93,22 @@ uv run qq-cli sessions
 
 如果 QQ.app 还没有 `get-task-allow` 调试权限，`qq-cli init` 会先尝试自动补签名；这一步通常需要管理员权限。
 
-## 真实验证
+## 破解与解密
 
-已经在 macOS 上对真实 QQ 客户端做过一轮端到端验证，不走 mock 或测试数据：
+最常用的方式是直接执行：
 
 ```bash
-uv run qq-cli init --force --timeout 240
-uv run qq-cli sessions --limit 5
-uv run qq-cli contacts --groups --limit 5
-uv run qq-cli members "某个群"
-uv run qq-cli history "某个群" --limit 10
+uv run qq-cli init
 ```
 
-验证结果：
+这条命令会自动完成：
 
-- `init` 能自动定位用户 `nt_db`、抓取运行时 key、写入 `~/.qq-cli/config.json`
-- `init` 完成后会自动导出 `nt_msg`、`profile_info`、`group_info`、`emoji`、`collection`、`files_in_chat`、`rich_media`
-- 实测用户 `nt_db` 的运行时 key 长度可能是 `16`，不要再假设固定 `32` 字节
-- `sessions` 能返回真实最近会话
-- `contacts --groups` 能列出真实群聊
-- `members` 能列出真实群成员和管理员
-- `history` 已经能恢复文本、图片占位、引用消息、聊天记录卡片等常见内容
+- 定位真实 `nt_db`
+- 启动 QQ 并抓取运行时 `pKey`
+- 导出明文数据库
+- 写入 `~/.qq-cli/config.json`
 
-如果第一次 `init` 超时，常见原因是 QQ 已经启动但尚未完成前台初始化；把 QQ 激活到前台后重试即可。
-
-## 数据来源
-
-实现时参考了以下公开资料：
-
-- [QQNT 数据库存放位置与结构概览](https://lengyue.me/2023/09/19/ntqq-db/)
-- [QQDecrypt: 读取数据库说明](https://qqbackup.github.io/QQDecrypt/view/read_db.html)
-- [QQDecrypt: 消息导出说明](https://qqbackup.github.io/QQDecrypt/view/message_export.html)
-- [QQDecrypt: nt_msg.db](https://qqbackup.github.io/QQDecrypt/view/db_file_analysis/nt_msg.db.html)
-- [QQDecrypt: profile_info.db](https://qqbackup.github.io/QQDecrypt/view/db_file_analysis/profile_info.db.html)
-- [QQDecrypt: group_info.db](https://qqbackup.github.io/QQDecrypt/view/db_file_analysis/group_info.db.html)
-- [QQDecrypt: emoji.db](https://qqbackup.github.io/QQDecrypt/view/db_file_analysis/emoji.db.html)
-- [QQDecrypt: collection.db](https://qqbackup.github.io/QQDecrypt/view/db_file_analysis/collection.db.html)
-- [QQDecrypt: files_in_chat.db](https://qqbackup.github.io/QQDecrypt/view/db_file_analysis/files_in_chat.db.html)
-- [QQDecrypt: rich_media.db](https://qqbackup.github.io/QQDecrypt/view/db_file_analysis/rich_media.db.html)
-- [QQDecrypt: NTQQ (macOS ARM) 解密](https://qqbackup.github.io/QQDecrypt/decrypt/NTQQ%20(macOS%20ARM).html)
-- [QQDecrypt: 解密数据库](https://qqbackup.github.io/QQDecrypt/decrypt/decode_db.html)
+更完整的破解/解密说明、真实验证记录、手动 `decrypt` 用法和排障说明见 [`DECRYPT_CN.md`](./DECRYPT_CN.md)。
 
 ## 设计取舍
 
