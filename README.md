@@ -52,5 +52,6 @@ uv run qq-cli emojis
 ## Notes
 
 - `qq-cli` supports automatic runtime key capture and decryption on macOS.
+- If automatic re-signing fails, follow the manual QQ.app re-signing steps in [DECRYPT_CN.md](./DECRYPT_CN.md).
 - This is not an offline brute-force decryptor. The key point is obtaining the real runtime `pKey` from a running QQ process.
 - Different QQ versions may expose different key lengths. Do not assume a fixed `32`-byte key.

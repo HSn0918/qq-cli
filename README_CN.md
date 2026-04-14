@@ -13,6 +13,7 @@
 
 - `qq-cli init` 的自动抓 key + 自动解密流程
 - `qq-cli decrypt` 的手动解密方式
+- QQ.app 的手动重签名步骤
 - 真实 QQ 客户端验证结果
 - 常见超时与签名问题的排障说明
 
@@ -91,7 +92,7 @@ uv run qq-cli decrypt --key '你的运行时 pKey' --out-dir /tmp/qq-cli-decrypt
 uv run qq-cli sessions
 ```
 
-如果 QQ.app 还没有 `get-task-allow` 调试权限，`qq-cli init` 会先尝试自动补签名；这一步通常需要管理员权限。
+如果 QQ.app 还没有 `get-task-allow` 调试权限，`qq-cli init` 会先尝试自动补签名；这一步通常需要管理员权限。自动补签失败时，可以直接按 [`DECRYPT_CN.md`](./DECRYPT_CN.md) 里的“手动重签名 QQ.app”步骤处理。
 
 ## 破解与解密
 
@@ -109,10 +110,3 @@ uv run qq-cli init
 - 写入 `~/.qq-cli/config.json`
 
 更完整的破解/解密说明、真实验证记录、手动 `decrypt` 用法和排障说明见 [`DECRYPT_CN.md`](./DECRYPT_CN.md)。
-
-## 设计取舍
-
-- macOS 版 `qq-cli init` 现在会直接启动 QQ、命中用户 `nt_db`、抓取运行时 key，然后立即解密，不再要求手工 LLDB。
-- `decrypt` 命令仍保留，流程参照 QQDecrypt：先移除 1024 字节头，再按 SQLCipher 参数导出明文库。
-- `40800` / `40051` protobuf 采用“字段驱动的尽力解析”，优先恢复文本、文件名、媒体路径、引用内容。
-- 对不同 QQNT 版本的字段漂移做了保守兼容：查询前先检查表和列是否存在，不假设所有列始终都在。

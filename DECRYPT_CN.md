@@ -51,6 +51,46 @@ uv run qq-cli init --force --timeout 240
 - `~/.qq-cli/config.json`
 - `~/.qq-cli/decrypted/`
 
+如果 `init` 自动补签名失败，可以先按下面的“手动重签名 QQ.app”处理，再重新执行 `uv run qq-cli init --force`。
+
+## 手动重签名 QQ.app
+
+如果 QQ.app 没有 `get-task-allow`，LLDB 无法附加，`qq-cli init` 就拿不到运行时 `pKey`。这种情况下可以手动补签名：
+
+```bash
+# 1. 退出 QQ
+killall QQ 2>/dev/null
+
+# 2. 导出 QQ 当前权限
+codesign -d --entitlements - --xml /Applications/QQ.app > qq_ent.plist
+
+# 3. 验证 plist 格式
+plutil -lint qq_ent.plist
+
+# 4. 清理旧字段（如果没有会忽略）
+/usr/libexec/PlistBuddy -c "Delete :com.apple.security.get-task-allow" qq_ent.plist 2>/dev/null || true
+
+# 5. 添加调试权限
+/usr/libexec/PlistBuddy -c "Add :com.apple.security.get-task-allow bool true" qq_ent.plist
+
+# 6. 用修改后的权限重新签名
+codesign --force --sign - --entitlements qq_ent.plist /Applications/QQ.app
+
+# 7. 验证权限是否生效
+codesign -d --entitlements - --xml /Applications/QQ.app 2>/dev/null | grep get-task-allow -A1
+
+# 8. 清理临时文件
+rm qq_ent.plist
+
+# 9. 重启 QQ
+open /Applications/QQ.app
+
+# 10. 重新执行初始化
+uv run qq-cli init --force
+```
+
+如果你的 QQ 不在 `/Applications/QQ.app`，把上面的路径替换成真实安装路径即可。
+
 ## 手动解密
 
 如果你已经拿到了运行时 `pKey`，也可以绕过 `init`，直接执行解密：
@@ -142,7 +182,7 @@ uv run qq-cli history "某个群" --limit 10
 
 如果 `QQ.app` 没有 `get-task-allow`，`init` 会尝试自动补签名。
 
-这一步通常需要管理员权限，所以你可能会看到签名相关提示。只要补签成功，后续 `init` 就可以继续抓取运行时 key。
+这一步通常需要管理员权限，所以你可能会看到签名相关提示。只要补签成功，后续 `init` 就可以继续抓取运行时 key。自动补签失败时，直接按上面的“手动重签名 QQ.app”执行即可。
 
 ### 3. 为什么 `sqlite3` 直接打不开原始库
 
