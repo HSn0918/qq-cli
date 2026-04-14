@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import plistlib
 import shutil
 import subprocess
@@ -12,6 +13,8 @@ import textwrap
 
 
 DEFAULT_TIMEOUT = 120
+FAST_SCAN_TIMEOUT = 20
+STATE_DIR = os.path.expanduser("~/.qq-cli")
 
 
 def _find_qq_app(app_path: str | None = None) -> str:
@@ -83,14 +86,132 @@ def _resign_qq(app_path: str) -> None:
         )
 
 
-def _ensure_debuggable(app_path: str) -> None:
+def _ensure_debuggable(app_path: str) -> bool:
     if _has_debug_entitlement(app_path):
-        return
+        return False
     _resign_qq(app_path)
+    return True
 
 
 def _kill_running_qq() -> None:
     subprocess.run(["killall", "QQ"], capture_output=True, text=True, timeout=10)
+
+
+def _copy_snapshot_dir(target_db_dir: str, snapshot_dir: str) -> None:
+    os.makedirs(snapshot_dir, exist_ok=True)
+    for name in os.listdir(target_db_dir):
+        if not (
+            name.endswith(".db")
+            or name.endswith(".db-wal")
+            or name.endswith(".db-shm")
+            or name.endswith(".material")
+        ):
+            continue
+        src = os.path.join(target_db_dir, name)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(snapshot_dir, name))
+
+
+def _find_running_qq_pid() -> int | None:
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "QQ"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            return int(line)
+    return None
+
+
+def _c_source_path() -> str:
+    return os.path.join(os.path.dirname(__file__), "find_qq_key_macos.c")
+
+
+def _c_binary_path() -> str:
+    machine = platform.machine()
+    out_dir = os.path.join(STATE_DIR, "bin")
+    os.makedirs(out_dir, exist_ok=True)
+    return os.path.join(out_dir, f"find_qq_key_macos.{machine}")
+
+
+def _ensure_c_helper() -> str:
+    source_path = _c_source_path()
+    if not os.path.isfile(source_path):
+        raise RuntimeError(f"缺少 C 扫描器源码: {source_path}")
+
+    binary_path = _c_binary_path()
+    needs_build = not os.path.isfile(binary_path)
+    if not needs_build:
+        try:
+            needs_build = os.path.getmtime(binary_path) < os.path.getmtime(source_path)
+        except OSError:
+            needs_build = True
+
+    if not needs_build:
+        return binary_path
+
+    result = subprocess.run(
+        ["cc", "-O2", "-std=c11", "-o", binary_path, source_path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"编译 QQ C 扫描器失败: {stderr}")
+    os.chmod(binary_path, 0o755)
+    return binary_path
+
+
+def _extract_runtime_key_via_c_scan(db_dir: str, snapshot_dir: str, timeout: int) -> dict | None:
+    pid = _find_running_qq_pid()
+    if not pid:
+        return None
+
+    try:
+        helper = _ensure_c_helper()
+    except Exception:
+        return None
+
+    try:
+        result = subprocess.run(
+            [helper, str(pid), db_dir],
+            capture_output=True,
+            text=True,
+            timeout=max(5, min(timeout, FAST_SCAN_TIMEOUT)),
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        return None
+
+    try:
+        payload = json.loads(stdout.splitlines()[-1])
+    except json.JSONDecodeError:
+        return None
+
+    if not payload.get("db_path") or not payload.get("key"):
+        return None
+
+    _copy_snapshot_dir(db_dir, snapshot_dir)
+    payload["snapshot_dir"] = snapshot_dir
+    payload["stdout"] = result.stdout
+    payload["stderr"] = result.stderr
+    payload["method"] = "c_scan"
+    return payload
 
 
 def _write_lldb_callback(module_path: str, target_db_dir: str, snapshot_dir: str, result_path: str, hits_path: str) -> None:
@@ -239,17 +360,8 @@ def _tail_text(path: str, limit: int = 10) -> str:
     return "".join(lines[-limit:]).strip()
 
 
-def extract_runtime_key(db_dir: str, snapshot_dir: str, app_path: str | None = None, timeout: int = DEFAULT_TIMEOUT) -> dict:
-    qq_app = _find_qq_app(app_path)
-    qq_exec = _qq_exec_path(qq_app)
-    target_db_dir = os.path.realpath(db_dir)
-
-    if not os.path.isdir(target_db_dir):
-        raise RuntimeError(f"NTQQ 数据目录不存在: {target_db_dir}")
-
-    _ensure_debuggable(qq_app)
+def _extract_runtime_key_via_lldb(target_db_dir: str, snapshot_dir: str, qq_exec: str, timeout: int) -> dict:
     _kill_running_qq()
-    os.makedirs(snapshot_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="qq-cli-lldb-") as work_dir:
         module_path = os.path.join(work_dir, "qq_cli_lldb_hook.py")
@@ -279,6 +391,7 @@ def extract_runtime_key(db_dir: str, snapshot_dir: str, app_path: str | None = N
             payload["snapshot_dir"] = snapshot_dir
             payload["stdout"] = result.stdout
             payload["stderr"] = result.stderr
+            payload["method"] = "lldb"
             return payload
 
         combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
@@ -290,3 +403,33 @@ def extract_runtime_key(db_dir: str, snapshot_dir: str, app_path: str | None = N
             f"最近命中:\n{hits_tail or '无'}\n"
             f"LLDB 输出:\n{detail}"
         )
+
+
+def extract_runtime_key(
+    db_dir: str,
+    snapshot_dir: str,
+    app_path: str | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    strategy: str = "auto",
+) -> dict:
+    qq_app = _find_qq_app(app_path)
+    qq_exec = _qq_exec_path(qq_app)
+    target_db_dir = os.path.realpath(db_dir)
+
+    if not os.path.isdir(target_db_dir):
+        raise RuntimeError(f"NTQQ 数据目录不存在: {target_db_dir}")
+
+    resigned = _ensure_debuggable(qq_app)
+    os.makedirs(snapshot_dir, exist_ok=True)
+
+    if strategy not in {"auto", "c_scan", "lldb"}:
+        raise RuntimeError(f"不支持的抓取策略: {strategy}")
+
+    if strategy in {"auto", "c_scan"} and not resigned:
+        payload = _extract_runtime_key_via_c_scan(target_db_dir, snapshot_dir, timeout)
+        if payload:
+            return payload
+        if strategy == "c_scan":
+            raise RuntimeError("C 快速扫描未能从当前 QQ 进程提取到运行时 key。")
+
+    return _extract_runtime_key_via_lldb(target_db_dir, snapshot_dir, qq_exec, timeout)

@@ -1,57 +1,38 @@
 # qq-cli
 
-`qq-cli` is a local NTQQ database CLI inspired by `wechat-cli`, but adapted to NTQQ's multi-database layout.
-
-It supports querying decrypted NTQQ data such as:
-
-- `nt_msg.db`
-- `profile_info.db`
-- `group_info.db`
-- `files_in_chat.db`
-- `rich_media.db`
-- `collection.db`
-- `emoji.db`
+A CLI tool for reading your local NTQQ databases — query sessions, chat history, contacts, files, and more.
 
 ## Quick Start
 
-This project uses `uv`.
-
 ```bash
 uv run qq-cli init
 uv run qq-cli sessions --limit 20
 ```
 
-On macOS, `qq-cli init` can:
+`init` automatically locates your QQ database, captures the runtime key, exports plaintext databases, and saves config to `~/.qq-cli/config.json`.
 
-- locate the real user `nt_db`
-- launch QQ and capture the runtime `pKey`
-- snapshot the raw databases
-- decrypt them into plaintext SQLite files
-- save config to `~/.qq-cli/config.json`
+> If auto re-signing fails, follow the manual QQ.app re-signing steps in [DECRYPT_CN.md](./DECRYPT_CN.md), then re-run `init`.
 
-## Common Commands
+## Commands
 
 ```bash
-uv run qq-cli init
-uv run qq-cli decrypt --key 'runtime-pKey'
-uv run qq-cli contacts
-uv run qq-cli contacts --groups
-uv run qq-cli members "Some Group"
-uv run qq-cli sessions --limit 20
-uv run qq-cli history "Some Chat" --limit 50
-uv run qq-cli files --chat "Some Group"
-uv run qq-cli collections
-uv run qq-cli emojis
+uv run qq-cli init                              # Initialize (auto decrypt)
+uv run qq-cli init --force --timeout 240        # Force re-initialize
+
+uv run qq-cli contacts                          # List contacts
+uv run qq-cli contacts --groups                 # List groups
+uv run qq-cli members "Some Group"              # List group members
+uv run qq-cli sessions --limit 20               # Recent sessions
+uv run qq-cli history "Someone" --limit 50      # Chat history
+uv run qq-cli history "Some Group" --start-time "2026-04-01 00:00:00"
+uv run qq-cli files --chat "Some Group"         # Files in chat
+uv run qq-cli collections                       # Collections
+uv run qq-cli emojis                            # Emojis
+uv run qq-cli emojis --system                   # System emojis
 ```
 
-## Docs
+If you already have the runtime `pKey`, you can decrypt directly:
 
-- Chinese README: [README_CN.md](./README_CN.md)
-- Decrypt guide: [DECRYPT_CN.md](./DECRYPT_CN.md)
-
-## Notes
-
-- `qq-cli` supports automatic runtime key capture and decryption on macOS.
-- If automatic re-signing fails, follow the manual QQ.app re-signing steps in [DECRYPT_CN.md](./DECRYPT_CN.md).
-- This is not an offline brute-force decryptor. The key point is obtaining the real runtime `pKey` from a running QQ process.
-- Different QQ versions may expose different key lengths. Do not assume a fixed `32`-byte key.
+```bash
+uv run qq-cli decrypt --key 'your-runtime-pKey'
+```

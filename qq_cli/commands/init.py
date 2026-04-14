@@ -51,6 +51,7 @@ def init(ctx, db_dir, decrypted_dir, app_path, timeout, force):
         except RuntimeError as exc:
             raise click.ClickException(str(exc)) from exc
 
+        click.echo(f"抓取方式: {key_info.get('method', 'unknown')}")
         click.echo(f"命中数据库: {key_info['db_path']}")
         click.echo(f"抓取到 key(len={key_info['key_len']}): {key_info['key']}")
         click.echo(f"开始导出明文数据库 -> {os.path.abspath(out_dir)}")
@@ -59,6 +60,28 @@ def init(ctx, db_dir, decrypted_dir, app_path, timeout, force):
             decrypt_result = decrypt_db_dir(snapshot_dir, out_dir, key_info["key"])
         except SQLCipherNotFoundError as exc:
             raise click.ClickException(str(exc)) from exc
+
+        if not any(item["name"] == "nt_msg" for item in decrypt_result["decrypted"]) and key_info.get("method") == "c_scan":
+            click.echo("C 快速扫描得到的 key 未通过解密验证，回退 LLDB 启动期抓取 ...")
+            try:
+                key_info = extract_runtime_key(
+                    db_dir=db_dir,
+                    snapshot_dir=snapshot_dir,
+                    app_path=app_path,
+                    timeout=timeout,
+                    strategy="lldb",
+                )
+            except RuntimeError as exc:
+                raise click.ClickException(str(exc)) from exc
+
+            click.echo(f"抓取方式: {key_info.get('method', 'unknown')}")
+            click.echo(f"命中数据库: {key_info['db_path']}")
+            click.echo(f"抓取到 key(len={key_info['key_len']}): {key_info['key']}")
+            click.echo(f"开始导出明文数据库 -> {os.path.abspath(out_dir)}")
+            try:
+                decrypt_result = decrypt_db_dir(snapshot_dir, out_dir, key_info["key"])
+            except SQLCipherNotFoundError as exc:
+                raise click.ClickException(str(exc)) from exc
 
     if not any(item["name"] == "nt_msg" for item in decrypt_result["decrypted"]):
         failures = "\n".join(f"  {item['name']}: {item['error']}" for item in decrypt_result["failures"])
