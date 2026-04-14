@@ -2,6 +2,8 @@
 
 A CLI tool for reading your local NTQQ databases — query sessions, chat history, contacts, files, and more.
 
+**Supported version: macOS QQ 6.9.93** (other versions untested)
+
 ## Quick Start
 
 ```bash

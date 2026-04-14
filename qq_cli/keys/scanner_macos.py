@@ -230,6 +230,89 @@ def _extract_runtime_key_via_c_scan(db_dir: str, snapshot_dir: str, timeout: int
     return payload
 
 
+def _find_wrapper_node_path(qq_app: str) -> str | None:
+    candidate = os.path.join(qq_app, "Contents", "Resources", "app", "wrapper.node")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _find_key_symbol_offline(wrapper_path: str) -> str | None:
+    """Scan wrapper.node on disk (no process needed) to find the symbol that calls sqlite3_key."""
+    scan_script_source = textwrap.dedent(
+        """
+        import lldb
+        import sys
+
+        RESULT_PATH = sys.argv[1] if len(sys.argv) > 1 else "/tmp/qq-cli-sym.txt"
+
+        def scan_symbols(debugger, command, result, internal_dict):
+            target = debugger.GetSelectedTarget()
+            if not target.IsValid():
+                return
+            for mi in range(target.GetNumModules()):
+                m = target.GetModuleAtIndex(mi)
+                for si in range(m.GetNumSymbols()):
+                    sym = m.GetSymbolAtIndex(si)
+                    if sym.GetType() != lldb.eSymbolTypeCode:
+                        continue
+                    name = sym.GetName() or ""
+                    if "unnamed_symbol" not in name and "sqlite3_key" not in name:
+                        continue
+                    addr = sym.GetStartAddress()
+                    if not addr.IsValid():
+                        continue
+                    instructions = target.ReadInstructions(addr, 200)
+                    for ii in range(instructions.GetSize()):
+                        inst = instructions.GetInstructionAtIndex(ii)
+                        operands = inst.GetOperands(target) or ""
+                        if "sqlite3_key" in operands:
+                            with open(RESULT_PATH, "w") as f:
+                                f.write(name)
+                            return
+
+        def __lldb_init_module(debugger, internal_dict):
+            debugger.HandleCommand("command script add -f scan.scan_symbols qq_cli_scan")
+        """
+    ).strip()
+
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory(prefix="qq-cli-scan-") as work_dir:
+        script_path = os.path.join(work_dir, "scan.py")
+        result_path = os.path.join(work_dir, "sym.txt")
+        lldb_cmd_path = os.path.join(work_dir, "scan.lldb")
+
+        with open(script_path, "w") as f:
+            f.write(scan_script_source + "\n")
+        # patch RESULT_PATH into the script
+        with open(script_path) as f:
+            src = f.read()
+        src = src.replace(
+            'sys.argv[1] if len(sys.argv) > 1 else "/tmp/qq-cli-sym.txt"',
+            repr(result_path),
+        )
+        with open(script_path, "w") as f:
+            f.write(src)
+
+        with open(lldb_cmd_path, "w") as f:
+            f.write(f"command script import {script_path}\n")
+            f.write("qq_cli_scan\n")
+            f.write("quit\n")
+
+        try:
+            subprocess.run(
+                ["lldb", wrapper_path, "--batch", "-s", lldb_cmd_path],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:
+            return None
+
+        if os.path.isfile(result_path):
+            name = open(result_path).read().strip()
+            return name or None
+    return None
+
+
 def _write_lldb_callback(module_path: str, target_db_dir: str, snapshot_dir: str, result_path: str, hits_path: str) -> None:
     source = textwrap.dedent(
         f"""
@@ -288,6 +371,57 @@ def _write_lldb_callback(module_path: str, target_db_dir: str, snapshot_dir: str
                     shutil.copy2(src, os.path.join(SNAPSHOT_DIR, name))
 
 
+        def _find_key_symbol(target):
+            # Find unnamed symbol in wrapper.node that calls sqlite3_key/sqlite3_key_v2
+            wrapper = None
+            for i in range(target.GetNumModules()):
+                m = target.GetModuleAtIndex(i)
+                fname = m.GetFileSpec().GetFilename()
+                if fname and fname.startswith("wrapper") and fname.endswith(".node"):
+                    wrapper = m
+                    break
+            if not wrapper:
+                return None
+
+            for i in range(wrapper.GetNumSymbols()):
+                sym = wrapper.GetSymbolAtIndex(i)
+                if sym.GetType() != lldb.eSymbolTypeCode:
+                    continue
+                name = sym.GetName() or ""
+                if "unnamed_symbol" not in name and "sqlite3_key" not in name:
+                    continue
+                addr = sym.GetStartAddress()
+                if not addr.IsValid():
+                    continue
+                instructions = target.ReadInstructions(addr, 200)
+                for j in range(instructions.GetSize()):
+                    inst = instructions.GetInstructionAtIndex(j)
+                    operands = inst.GetOperands(target) or ""
+                    if "sqlite3_key" in operands:
+                        return name
+            return None
+
+
+        _BP_SET = False
+
+
+        def __lldb_init_module(debugger, internal_dict):
+            pass
+
+
+        def handle_stop(debugger, command, result, internal_dict):
+            global _BP_SET
+            if _BP_SET:
+                return
+            target = debugger.GetSelectedTarget()
+            sym_name = _find_key_symbol(target)
+            if not sym_name:
+                return
+            bp = target.BreakpointCreateByName(sym_name, "wrapper.node")
+            bp.SetScriptCallbackFunction("qq_cli_lldb_hook.breakpoint_callback")
+            _BP_SET = True
+
+
         def breakpoint_callback(frame, bp_loc, internal_dict):
             process = frame.GetThread().GetProcess()
             regs = {{
@@ -341,7 +475,6 @@ def _write_lldb_callback(module_path: str, target_db_dir: str, snapshot_dir: str
             if not matched:
                 return False
 
-            _copy_snapshot()
             with open(RESULT_PATH, "w", encoding="utf-8") as handle:
                 json.dump(info, handle, ensure_ascii=False, indent=2)
                 handle.write("\\n")
@@ -353,12 +486,12 @@ def _write_lldb_callback(module_path: str, target_db_dir: str, snapshot_dir: str
         handle.write("\n")
 
 
-def _write_lldb_commands(script_path: str, module_path: str) -> None:
+def _write_lldb_commands(script_path: str, module_path: str, sym_name: str) -> None:
     commands = textwrap.dedent(
         f"""
         settings set target.process.stop-on-sharedlibrary-events false
         command script import {module_path}
-        breakpoint set -s wrapper.node -n ___lldb_unnamed_symbol372387
+        breakpoint set -s wrapper.node -n {sym_name}
         breakpoint command add -F qq_cli_lldb_hook.breakpoint_callback 1
         process attach -n QQ --waitfor
         process continue
@@ -384,7 +517,16 @@ def _extract_runtime_key_via_lldb(
     qq_exec: str,
     timeout: int,
 ) -> dict:
-    # 杀掉已有的 QQ 进程（需要重签名时必须重启；auto 时也重启保证断点能在启动期触发）
+    # 在启动 LLDB 之前，先离线从磁盘上的 wrapper.node 扫出正确的 symbol 名
+    sym_name = None
+    wrapper_path = _find_wrapper_node_path(qq_app)
+    if wrapper_path:
+        sym_name = _find_key_symbol_offline(wrapper_path)
+    if not sym_name:
+        # 回退到已知的 symbol（QQ 6.9.x arm64）
+        sym_name = "___lldb_unnamed_symbol372387"
+
+    # 杀掉已有的 QQ 进程（保证断点能在启动期触发）
     _kill_running_qq()
 
     with tempfile.TemporaryDirectory(prefix="qq-cli-lldb-") as work_dir:
@@ -394,7 +536,7 @@ def _extract_runtime_key_via_lldb(
         hits_path = os.path.join(work_dir, "hits.jsonl")
 
         _write_lldb_callback(module_path, target_db_dir, snapshot_dir, result_path, hits_path)
-        _write_lldb_commands(script_path, module_path)
+        _write_lldb_commands(script_path, module_path, sym_name)
 
         # LLDB 先启动，用 --waitfor 等待 QQ 进程出现后立刻 attach
         proc = subprocess.Popen(
@@ -422,10 +564,14 @@ def _extract_runtime_key_via_lldb(
         if os.path.exists(result_path):
             with open(result_path, encoding="utf-8") as handle:
                 payload = json.load(handle)
+            # Snapshot happens here — delay so QQ finishes startup and WAL checkpoints
+            time.sleep(30)
+            _copy_snapshot_dir(target_db_dir, snapshot_dir)
             payload["snapshot_dir"] = snapshot_dir
             payload["stdout"] = stdout
             payload["stderr"] = stderr
             payload["method"] = "lldb"
+            payload["waited_for_checkpoint"] = True
             return payload
 
         combined = ((stdout or "") + "\n" + (stderr or "")).strip()

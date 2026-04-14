@@ -54,6 +54,8 @@ def init(ctx, db_dir, decrypted_dir, app_path, timeout, force):
         click.echo(f"抓取方式: {key_info.get('method', 'unknown')}")
         click.echo(f"命中数据库: {key_info['db_path']}")
         click.echo(f"抓取到 key(len={key_info['key_len']}): {key_info['key']}")
+        if key_info.get("waited_for_checkpoint"):
+            click.echo("已等待 QQ 完成启动，WAL checkpoint 完成")
         click.echo(f"开始导出明文数据库 -> {os.path.abspath(out_dir)}")
 
         try:
