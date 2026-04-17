@@ -2,6 +2,8 @@
 
 A CLI tool for reading your local NTQQ databases — query sessions, chat history, contacts, files, and more.
 
+> Notice: This project is intended mainly for learning, research, and personal data handling. Only use it with your own account, your own device, and your own data, and assume the related risks yourself.
+
 **Supported version: macOS QQ 6.9.93** (other versions untested)
 
 ## Quick Start
