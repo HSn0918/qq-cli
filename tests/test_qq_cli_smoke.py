@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -134,6 +135,10 @@ class QQCliSmokeTest(unittest.TestCase):
                 (_message_blob(text="hello from alice"),),
             )
             conn.execute(
+                'INSERT INTO c2c_msg_table VALUES (1, 7, 8, 2, 0, 0, "u_100", "u_100", 10001, 10001, 1710000200, "", "Alice", ?)',
+                (_message_blob(text="second message from alice"),),
+            )
+            conn.execute(
                 'INSERT INTO group_msg_table VALUES (2, 5, 6, 3, 0, 0, "u_200", "8888", 8888, 10002, 1710000200, "Bob In Group", "Bob", ?)',
                 (_message_blob(file_name="report.pdf", file_path="/tmp/report.pdf"),),
             )
@@ -211,7 +216,33 @@ class QQCliSmokeTest(unittest.TestCase):
         self.assertIn("AI Team", session_names)
 
         history = self._run_json("history", "Alice", "--limit", "10")
-        self.assertEqual(history["messages"][0]["text"], "hello from alice")
+        self.assertEqual(history["messages"][0]["text"], "second message from alice")
+
+        end_time = datetime.fromtimestamp(1710000100).strftime("%Y-%m-%d %H:%M:%S")
+        filtered_history = self._run_json("history", "Alice", "--limit", "10", "--end-time", end_time)
+        self.assertEqual(filtered_history["count"], 1)
+        self.assertEqual(filtered_history["messages"][0]["text"], "hello from alice")
+
+        output_path = self.root / "exports" / "alice-history.json"
+        result = self.runner.invoke(
+            cli,
+            [
+                "--config",
+                str(self.config),
+                "--decrypted-dir",
+                str(self.db_dir),
+                "history",
+                "Alice",
+                "--limit",
+                "10",
+                "--output",
+                str(output_path),
+            ],
+        )
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        exported = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(exported["count"], 2)
+        self.assertEqual(exported["messages"][0]["text"], "second message from alice")
 
         members = self._run_json("members", "AI Team")
         self.assertEqual(members["count"], 2)

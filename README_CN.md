@@ -82,6 +82,7 @@ uv run qq-cli sessions --limit 20               # 最近会话
 uv run qq-cli --mode live sessions --limit 20  # 实验：直接读取原始加密库
 uv run qq-cli history "张三" --limit 50         # 聊天记录
 uv run qq-cli history "某个群" --start-time "2026-04-01 00:00:00"
+uv run qq-cli history "某个群" --start-time "2026-04-01 00:00:00" --end-time "2026-04-16 23:59:59" --output ./history.json
 uv run qq-cli files --chat "某个群"             # 聊天文件
 uv run qq-cli collections                       # 收藏
 uv run qq-cli emojis                            # 表情

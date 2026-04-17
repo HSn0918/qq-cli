@@ -14,8 +14,11 @@ dependencies = [
 [project.scripts]
 qq-cli = "qq_cli.main:cli"
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 
 [tool.setuptools.package-data]
 "qq_cli.keys" = ["*.c"]

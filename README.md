@@ -82,6 +82,7 @@ uv run qq-cli sessions --limit 20               # Recent sessions
 uv run qq-cli --mode live sessions --limit 20  # Experimental: read raw encrypted NTQQ DBs
 uv run qq-cli history "Someone" --limit 50      # Chat history
 uv run qq-cli history "Some Group" --start-time "2026-04-01 00:00:00"
+uv run qq-cli history "Some Group" --start-time "2026-04-01 00:00:00" --end-time "2026-04-16 23:59:59" --output ./history.json
 uv run qq-cli files --chat "Some Group"         # Files in chat
 uv run qq-cli collections                       # Collections
 uv run qq-cli emojis                            # Emojis

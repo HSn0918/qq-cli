@@ -14,7 +14,7 @@ uv run --with pyinstaller --with-editable "$ROOT_DIR" pyinstaller \
   --noconfirm \
   --onefile \
   --name qq-cli \
-  --paths "$ROOT_DIR" \
+  --paths "$ROOT_DIR/src" \
   --collect-all qq_cli \
   "$ENTRY"
 
