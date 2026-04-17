@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import click
 
-from ..core.messages import load_collections
-from ..output.formatter import output
+from qq_cli.core.messages import load_collections
+from qq_cli.output.formatter import output
 
 
 @click.command("collections")

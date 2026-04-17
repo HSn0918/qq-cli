@@ -6,9 +6,9 @@ import os
 
 import click
 
-from ..core.config import CONFIG_FILE, auto_detect_db_dir, load_config
-from ..core.decrypt import SQLCipherNotFoundError, decrypt_db_dir
-from ..output.formatter import output
+from qq_cli.core.config import CONFIG_FILE, auto_detect_db_dir, load_config
+from qq_cli.core.decrypt import SQLCipherNotFoundError, decrypt_db_dir
+from qq_cli.output.formatter import output
 
 
 def _resolve_key(key: str | None, key_env: str | None, cfg: dict | None = None) -> str:

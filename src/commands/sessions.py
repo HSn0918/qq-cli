@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import click
 
-from ..output.formatter import output
+from qq_cli.output.formatter import output
 
 
 @click.command("sessions")

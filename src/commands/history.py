@@ -6,9 +6,9 @@ from pathlib import Path
 
 import click
 
-from ..core.contacts import resolve_chat_target
-from ..core.messages import load_history, parse_time_input
-from ..output.formatter import output
+from qq_cli.core.contacts import resolve_chat_target
+from qq_cli.core.messages import load_history, parse_time_input
+from qq_cli.output.formatter import output
 
 
 @click.command("history")

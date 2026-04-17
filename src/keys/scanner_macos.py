@@ -514,7 +514,6 @@ def _extract_runtime_key_via_lldb(
     target_db_dir: str,
     snapshot_dir: str,
     qq_app: str,
-    qq_exec: str,
     timeout: int,
 ) -> dict:
     # 在启动 LLDB 之前，先离线从磁盘上的 wrapper.node 扫出正确的 symbol 名
@@ -593,7 +592,6 @@ def extract_runtime_key(
     strategy: str = "auto",
 ) -> dict:
     qq_app = _find_qq_app(app_path)
-    qq_exec = _qq_exec_path(qq_app)
     target_db_dir = os.path.realpath(db_dir)
 
     if not os.path.isdir(target_db_dir):
@@ -612,4 +610,4 @@ def extract_runtime_key(
         if strategy == "c_scan":
             raise RuntimeError("C 快速扫描未能从当前 QQ 进程提取到运行时 key。")
 
-    return _extract_runtime_key_via_lldb(target_db_dir, snapshot_dir, qq_app, qq_exec, timeout)
+    return _extract_runtime_key_via_lldb(target_db_dir, snapshot_dir, qq_app, timeout)

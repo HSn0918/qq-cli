@@ -7,8 +7,8 @@ import shutil
 import tempfile
 from collections.abc import Iterator, Mapping
 
-from .db import discover_db_files
-from .decrypt import decrypt_db_dir, require_sqlcipher
+from qq_cli.core.db import discover_db_files
+from qq_cli.core.decrypt import decrypt_db_dir, require_sqlcipher
 
 
 def _reset_dir(path: str) -> None:

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .contacts import ChatTarget
-from .db import connect, quote_ident, table_columns, table_exists
-from .protobuf import (
+from qq_cli.core.contacts import ChatTarget
+from qq_cli.core.db import connect, quote_ident, table_columns, table_exists
+from qq_cli.core.protobuf import (
     collect_strings,
     field_first_int,
     field_first_string,
@@ -690,3 +690,167 @@ def _decode_scalar_map(blob: bytes | None) -> dict[int, list]:
 def _first(value_map: dict[int, list], key: int):
     values = value_map.get(key, [])
     return values[0] if values else None
+
+
+def search_messages(
+    db_files: dict[str, str],
+    target: ChatTarget | None,
+    buddies: list[dict],
+    keyword: str,
+    limit: int = 50,
+    offset: int = 0,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+) -> list[dict]:
+    path = db_files.get("nt_msg")
+    if not path:
+        return []
+
+    tables = ["c2c_msg_table", "group_msg_table"] if target is None else (
+        ["group_msg_table"] if target.kind == "group" else ["c2c_msg_table"]
+    )
+
+    results: list[dict] = []
+    with connect(path) as conn:
+        for table in tables:
+            if not table_exists(conn, table):
+                continue
+            cols = table_columns(conn, table)
+
+            clauses: list[str] = []
+            params: list = []
+
+            if target is not None:
+                where_chat, chat_params = _history_filters(cols, target)
+                clauses.append(where_chat)
+                params.extend(chat_params)
+
+            time_clauses, time_params = _time_filters(start_ts, end_ts, cols)
+            clauses.extend(time_clauses)
+            params.extend(time_params)
+
+            if "40800" in cols:
+                clauses.append(f'CAST({quote_ident("40800")} AS TEXT) LIKE ?')
+                params.append(f"%{keyword}%")
+
+            where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
+
+            select_parts = [
+                f'{quote_ident("40001")} AS msg_id' if "40001" in cols else "NULL AS msg_id",
+                f'{quote_ident("40020")} AS sender_uid' if "40020" in cols else "NULL AS sender_uid",
+                f'{quote_ident("40021")} AS peer_uid' if "40021" in cols else "NULL AS peer_uid",
+                f'{quote_ident("40030")} AS peer_uin' if "40030" in cols else "NULL AS peer_uin",
+                f'{quote_ident("40033")} AS sender_uin' if "40033" in cols else "NULL AS sender_uin",
+                f'{quote_ident("40050")} AS msg_time' if "40050" in cols else "NULL AS msg_time",
+                f'{quote_ident("40090")} AS sender_member_name' if "40090" in cols else "NULL AS sender_member_name",
+                f'{quote_ident("40093")} AS sender_nickname' if "40093" in cols else "NULL AS sender_nickname",
+                f'{quote_ident("40010")} AS chat_type' if "40010" in cols else "NULL AS chat_type",
+                f'{quote_ident("40800")} AS body' if "40800" in cols else "NULL AS body",
+            ]
+            sql = f"""
+                SELECT {", ".join(select_parts)}
+                FROM {quote_ident(table)}
+                {where_sql}
+                ORDER BY COALESCE({quote_ident("40050")}, 0) DESC
+                LIMIT ? OFFSET ?
+            """
+            rows = conn.execute(sql, (*params, limit, offset)).fetchall()
+            for row in rows:
+                decoded = decode_message_blob(row["body"])
+                if keyword.lower() not in decoded["text"].lower():
+                    continue
+                sender = resolve_sender_name(
+                    row["sender_uid"], row["sender_uin"],
+                    row["sender_nickname"], row["sender_member_name"], buddies,
+                )
+                results.append({
+                    "msg_id": row["msg_id"],
+                    "chat_type": row["chat_type"],
+                    "sender": sender,
+                    "peer_uid": row["peer_uid"],
+                    "peer_uin": row["peer_uin"],
+                    "timestamp": row["msg_time"],
+                    "time": format_timestamp(row["msg_time"]),
+                    "text": decoded["text"],
+                    "attachments": decoded["attachments"],
+                })
+
+    results.sort(key=lambda r: r["timestamp"] or 0, reverse=True)
+    return results[:limit]
+
+
+def stats_messages(
+    db_files: dict[str, str],
+    target: ChatTarget,
+    buddies: list[dict],
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+) -> dict:
+    path = db_files.get("nt_msg")
+    if not path:
+        return {"total": 0, "top_senders": [], "hourly": {}}
+
+    table = "group_msg_table" if target.kind == "group" else "c2c_msg_table"
+    with connect(path) as conn:
+        if not table_exists(conn, table):
+            return {"total": 0, "top_senders": [], "hourly": {}}
+        cols = table_columns(conn, table)
+        where_chat, params = _history_filters(cols, target)
+        time_clauses, time_params = _time_filters(start_ts, end_ts, cols)
+        where_parts = [where_chat, *time_clauses]
+        params.extend(time_params)
+        where_sql = " AND ".join(where_parts)
+
+        total = conn.execute(
+            f'SELECT COUNT(*) FROM {quote_ident(table)} WHERE {where_sql}',
+            params,
+        ).fetchone()[0]
+
+        sender_cols = [c for c in ("40020", "40033", "40090", "40093") if c in cols]
+        sender_rows: list[sqlite3.Row] = []
+        if sender_cols:
+            sender_col = quote_ident(sender_cols[0])
+            nick_col = quote_ident("40090") if "40090" in cols else (
+                quote_ident("40093") if "40093" in cols else sender_col
+            )
+            sender_rows = conn.execute(
+                f"""
+                SELECT {sender_col} AS uid, {nick_col} AS nick, COUNT(*) AS cnt
+                FROM {quote_ident(table)}
+                WHERE {where_sql}
+                GROUP BY {sender_col}
+                ORDER BY cnt DESC
+                LIMIT 10
+                """,
+                params,
+            ).fetchall()
+
+        hourly_rows = []
+        if "40050" in cols:
+            hourly_rows = conn.execute(
+                f"""
+                SELECT CAST(strftime('%H', datetime({quote_ident("40050")}, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
+                       COUNT(*) AS cnt
+                FROM {quote_ident(table)}
+                WHERE {where_sql}
+                GROUP BY hour
+                ORDER BY hour
+                """,
+                params,
+            ).fetchall()
+
+    top_senders = []
+    for row in sender_rows:
+        uid = row["uid"]
+        nick = row["nick"] or ""
+        buddy = next((b for b in buddies if str(b.get("nt_uid") or "") == str(uid or "")), None)
+        display = buddy["display_name"] if buddy else (nick or str(uid or ""))
+        top_senders.append({"name": display, "count": row["cnt"]})
+
+    hourly: dict[int, int] = {row["hour"]: row["cnt"] for row in hourly_rows if row["hour"] is not None}
+
+    return {
+        "total": total,
+        "top_senders": top_senders,
+        "hourly": hourly,
+    }

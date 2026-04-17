@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 
-from .config import CONFIG_FILE, load_config
-from .contacts import load_buddies, load_groups
-from .db import discover_db_files
-from .live import LiveDBFiles
-from .messages import load_recent_sessions
+from qq_cli.core.config import CONFIG_FILE, load_config
+from qq_cli.core.contacts import load_buddies, load_groups
+from qq_cli.core.db import discover_db_files
+from qq_cli.core.live import LiveDBFiles
+from qq_cli.core.messages import load_recent_sessions
 
 
 class AppContext:

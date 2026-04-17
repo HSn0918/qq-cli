@@ -6,9 +6,9 @@ import sys
 
 import click
 
-from . import __version__
-from .core.context import AppContext
-from .core.db import EncryptedNTQQDatabaseError
+from qq_cli import __version__
+from qq_cli.core.context import AppContext
+from qq_cli.core.db import EncryptedNTQQDatabaseError
 
 
 @click.group()
@@ -57,15 +57,17 @@ def cli(ctx, config_path, db_mode, decrypted_dir):
         sys.exit(1)
 
 
-from .commands.collections import collections
-from .commands.contacts import contacts
-from .commands.decrypt import decrypt
-from .commands.emojis import emojis
-from .commands.files import files
-from .commands.history import history
-from .commands.init import init
-from .commands.members import members
-from .commands.sessions import sessions
+from qq_cli.commands.collections import collections
+from qq_cli.commands.contacts import contacts
+from qq_cli.commands.decrypt import decrypt
+from qq_cli.commands.emojis import emojis
+from qq_cli.commands.files import files
+from qq_cli.commands.history import history
+from qq_cli.commands.init import init
+from qq_cli.commands.members import members
+from qq_cli.commands.search import search
+from qq_cli.commands.sessions import sessions
+from qq_cli.commands.stats import stats
 
 cli.add_command(init)
 cli.add_command(decrypt)
@@ -73,6 +75,8 @@ cli.add_command(contacts)
 cli.add_command(members)
 cli.add_command(sessions)
 cli.add_command(history)
+cli.add_command(search)
+cli.add_command(stats)
 cli.add_command(files)
 cli.add_command(collections)
 cli.add_command(emojis)

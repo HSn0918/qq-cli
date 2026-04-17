@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .db import connect, quote_ident, table_columns, table_exists
+from qq_cli.core.db import connect, quote_ident, table_columns, table_exists
 
 
 @dataclass

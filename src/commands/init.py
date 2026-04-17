@@ -7,10 +7,10 @@ import tempfile
 
 import click
 
-from ..core.config import CONFIG_FILE, auto_detect_db_dir, write_config
-from ..core.db import discover_db_files
-from ..core.decrypt import SQLCipherNotFoundError, decrypt_db_dir
-from ..keys import extract_runtime_key
+from qq_cli.core.config import CONFIG_FILE, auto_detect_db_dir, write_config
+from qq_cli.core.db import discover_db_files
+from qq_cli.core.decrypt import SQLCipherNotFoundError, decrypt_db_dir
+from qq_cli.keys import extract_runtime_key
 
 
 @click.command("init")

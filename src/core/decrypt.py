@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 
-from .db import KNOWN_DB_FILES, discover_db_files, is_ntqq_encrypted_file
+from qq_cli.core.db import KNOWN_DB_FILES, discover_db_files, is_ntqq_encrypted_file
 
 
 class SQLCipherNotFoundError(RuntimeError):

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import click
 
-from ..core.contacts import merge_recent_contacts
-from ..output.formatter import output
+from qq_cli.core.contacts import merge_recent_contacts
+from qq_cli.output.formatter import output
 
 
 @click.command("contacts")

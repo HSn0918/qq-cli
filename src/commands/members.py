@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import click
 
-from ..core.contacts import load_group_members, resolve_chat_target
-from ..output.formatter import output
+from qq_cli.core.contacts import load_group_members, resolve_chat_target
+from qq_cli.output.formatter import output
 
 
 @click.command("members")

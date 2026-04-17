@@ -15,10 +15,8 @@ dependencies = [
 qq-cli = "qq_cli.main:cli"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
+package-dir = {"qq_cli" = "src"}
+packages = ["qq_cli", "qq_cli.commands", "qq_cli.core", "qq_cli.keys", "qq_cli.output"]
 
 [tool.setuptools.package-data]
 "qq_cli.keys" = ["*.c"]

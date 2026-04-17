@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import click
 
-from ..core.contacts import resolve_chat_target
-from ..core.messages import load_files
-from ..output.formatter import output
+from qq_cli.core.contacts import resolve_chat_target
+from qq_cli.core.messages import load_files
+from qq_cli.output.formatter import output
 
 
 @click.command("files")

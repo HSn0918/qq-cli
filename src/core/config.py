@@ -8,7 +8,7 @@ import os
 import platform
 import sys
 
-from .db import discover_db_files
+from qq_cli.core.db import discover_db_files
 
 _SYSTEM = platform.system().lower()
 
