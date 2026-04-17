@@ -1,0 +1,47 @@
+{
+  "name": "@hsn0918/qq-cli",
+  "version": "0.1.0",
+  "description": "NTQQ database query CLI for local message archives",
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "bin": {
+    "qq-cli": "npm/bin/qq-cli"
+  },
+  "scripts": {
+    "prepack": "bash scripts/build_npm_binary.sh"
+  },
+  "files": [
+    "npm/bin/qq-cli",
+    "README.md",
+    "README_CN.md",
+    "DECRYPT_CN.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HSn0918/qq-cli.git"
+  },
+  "homepage": "https://github.com/HSn0918/qq-cli#readme",
+  "bugs": {
+    "url": "https://github.com/HSn0918/qq-cli/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "qq",
+    "ntqq",
+    "cli",
+    "sqlcipher",
+    "python",
+    "binary"
+  ]
+}

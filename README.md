@@ -6,6 +6,41 @@ A CLI tool for reading your local NTQQ databases — query sessions, chat histor
 
 **Supported version: macOS QQ 6.9.93** (other versions untested)
 
+## Install
+
+### Python / uv
+
+```bash
+uv tool install .
+# or
+uv run qq-cli --help
+```
+
+### npm (recommended)
+
+The npm package uses a scoped name and ships a `darwin-arm64` binary directly:
+
+```bash
+npm install -g @hsn0918/qq-cli
+qq-cli --help
+```
+
+If your local npm registry is not the official one, install from npm explicitly:
+
+```bash
+npm install -g @hsn0918/qq-cli --registry=https://registry.npmjs.org/
+qq-cli --help
+```
+
+Note: the current npm package is built for `macOS + Apple Silicon`. During `npm publish`, the publishing machine builds a single-file binary locally and uploads that binary in the package.
+
+When publishing, use the official npm registry explicitly to avoid local mirror settings interfering:
+
+```bash
+npm login --registry=https://registry.npmjs.org/
+npm publish --registry=https://registry.npmjs.org/ --access public
+```
+
 ## Quick Start
 
 ```bash

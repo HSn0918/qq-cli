@@ -6,6 +6,41 @@
 
 **支持版本：macOS QQ 6.9.93**（其他版本未经验证）
 
+## 安装
+
+### Python / uv
+
+```bash
+uv tool install .
+# 或
+uv run qq-cli --help
+```
+
+### npm（推荐）
+
+npm 包名使用 scoped 形式，并直接分发 `darwin-arm64` 二进制：
+
+```bash
+npm install -g @hsn0918/qq-cli
+qq-cli --help
+```
+
+如果你本机的 npm 默认走镜像源，建议显式使用 npm 官方源安装：
+
+```bash
+npm install -g @hsn0918/qq-cli --registry=https://registry.npmjs.org/
+qq-cli --help
+```
+
+注意：当前 npm 包按 `macOS + Apple Silicon` 构建；发布端在 `npm publish` 时会先本地打包单文件二进制，再上传到 npm。
+
+发布时建议显式指定 npm 官方源，避免本机镜像源配置干扰：
+
+```bash
+npm login --registry=https://registry.npmjs.org/
+npm publish --registry=https://registry.npmjs.org/ --access public
+```
+
 ## 快速开始
 
 ```bash
