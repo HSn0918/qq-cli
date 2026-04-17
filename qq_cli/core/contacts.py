@@ -183,6 +183,93 @@ def load_group_members(db_files: dict[str, str], group_uin: int) -> list[dict]:
     return results
 
 
+def merge_recent_contacts(
+    items: list[dict],
+    recent_sessions: list[dict],
+    *,
+    groups: bool = False,
+) -> list[dict]:
+    """Merge recent-session targets that are not present in contacts/group tables."""
+
+    merged = list(items)
+    seen: set[tuple] = set()
+
+    if groups:
+        for item in items:
+            seen.add(("group_name", _normalize(item.get("display_name"))))
+            if item.get("group_uin") is not None:
+                seen.add(("group_uin", str(item["group_uin"])))
+
+        for session in recent_sessions:
+            if session.get("chat_type") != 2:
+                continue
+            display_name = session.get("chat_name") or ""
+            peer_uin = session.get("peer_uin")
+            keys = {("group_name", _normalize(display_name))}
+            if peer_uin not in (None, 0, ""):
+                keys.add(("group_uin", str(peer_uin)))
+            if any(key in seen for key in keys):
+                continue
+            merged.append(
+                {
+                    "kind": "group",
+                    "display_name": display_name,
+                    "group_uin": peer_uin,
+                    "group_name": display_name,
+                    "group_remark": "",
+                    "owner_uid": "",
+                    "created_at": None,
+                    "max_members": None,
+                    "member_count": None,
+                    "is_exited": False,
+                    "source": "recent_session",
+                }
+            )
+            seen.update(keys)
+        return merged
+
+    for item in items:
+        seen.add(("display_name", _normalize(item.get("display_name"))))
+        if item.get("nt_uid"):
+            seen.add(("nt_uid", str(item["nt_uid"])))
+        if item.get("uin") not in (None, 0, ""):
+            seen.add(("uin", str(item["uin"])))
+        if item.get("qid"):
+            seen.add(("qid", _normalize(item["qid"])))
+
+    for session in recent_sessions:
+        if session.get("chat_type") == 2:
+            continue
+        display_name = session.get("chat_name") or ""
+        peer_uid = session.get("peer_uid")
+        peer_uin = session.get("peer_uin")
+        keys = {("display_name", _normalize(display_name))}
+        if peer_uid:
+            keys.add(("nt_uid", str(peer_uid)))
+        if peer_uin not in (None, 0, ""):
+            keys.add(("uin", str(peer_uin)))
+        if any(key in seen for key in keys):
+            continue
+        merged.append(
+            {
+                "kind": "c2c",
+                "display_name": display_name,
+                "nt_uid": peer_uid,
+                "qid": None,
+                "uin": peer_uin,
+                "nickname": display_name,
+                "remark": "",
+                "signature": "",
+                "avatar_url": "",
+                "category_id": None,
+                "is_friend": False,
+                "source": "recent_session",
+            }
+        )
+        seen.update(keys)
+    return merged
+
+
 def resolve_chat_target(
     chat_name: str,
     buddies: list[dict],

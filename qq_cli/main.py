@@ -18,16 +18,34 @@ from .core.db import EncryptedNTQQDatabaseError
     "config_path",
     default=None,
     envvar="QQ_CLI_CONFIG",
-    help="config.json 路径（默认自动查找）",
+    help="config.json 路径；默认读取 ~/.qq-cli/config.json",
+)
+@click.option(
+    "--mode",
+    "db_mode",
+    default="live",
+    type=click.Choice(["auto", "live", "decrypted"]),
+    show_default=True,
+    help=(
+        "数据库读取模式：live 为默认实验模式，会按需临时解密原始加密库；"
+        "auto 优先已导出的明文库；"
+        "decrypted 直接读取明文目录"
+    ),
+)
+@click.option(
+    "--decrypted-dir",
+    default=None,
+    help="显式指定明文数据库目录；传入后优先于 --mode，适合手动导出的明文库",
 )
 @click.pass_context
-def cli(ctx, config_path):
+def cli(ctx, config_path, db_mode, decrypted_dir):
     """QQ CLI — 查询 NTQQ 本地数据库。"""
-    if ctx.invoked_subcommand in ("init", "version"):
+    if ctx.invoked_subcommand in ("init", "version", "decrypt"):
         return
 
     try:
-        ctx.obj = AppContext(config_path)
+        ctx.obj = AppContext(config_path, mode=db_mode, decrypted_dir=decrypted_dir)
+        ctx.call_on_close(ctx.obj.close)
     except FileNotFoundError as exc:
         click.echo(str(exc), err=True)
         sys.exit(1)

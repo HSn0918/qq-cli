@@ -122,6 +122,14 @@ class QQCliSmokeTest(unittest.TestCase):
                 (_message_blob(text="group hello"),),
             )
             conn.execute(
+                'INSERT INTO recent_contact_v3_table VALUES (1, "u_300", 10003, 1710000300, ?, "Carol", "", "", "u_300", 10003, "", "")',
+                (_message_blob(text="hello from carol"),),
+            )
+            conn.execute(
+                'INSERT INTO recent_contact_v3_table VALUES (2, "9999", 9999, 1710000400, ?, "Guest", "", "", "u_400", 10004, "Hidden Group", "")',
+                (_message_blob(text="hidden group hello"),),
+            )
+            conn.execute(
                 'INSERT INTO c2c_msg_table VALUES (1, 2, 3, 2, 0, 0, "u_100", "u_100", 10001, 10001, 1710000100, "", "Alice", ?)',
                 (_message_blob(text="hello from alice"),),
             )
@@ -176,7 +184,10 @@ class QQCliSmokeTest(unittest.TestCase):
             )
 
     def _run_json(self, *args):
-        result = self.runner.invoke(cli, ["--config", str(self.config), *args])
+        result = self.runner.invoke(
+            cli,
+            ["--config", str(self.config), "--decrypted-dir", str(self.db_dir), *args],
+        )
         self.assertEqual(result.exit_code, 0, msg=result.output)
         return json.loads(result.output)
 
@@ -184,12 +195,20 @@ class QQCliSmokeTest(unittest.TestCase):
         contacts = self._run_json("contacts")
         self.assertEqual(contacts[0]["display_name"], "Alice Remark")
 
+        all_contacts = self._run_json("contacts", "--all")
+        self.assertTrue(any(item["display_name"] == "Carol" and item["source"] == "recent_session" for item in all_contacts))
+
         groups = self._run_json("contacts", "--groups")
         self.assertEqual(groups[0]["display_name"], "AI Team")
 
-        sessions = self._run_json("sessions", "--limit", "2")
-        self.assertEqual(sessions[0]["chat_name"], "AI Team")
-        self.assertEqual(sessions[1]["chat_name"], "Alice Remark")
+        all_groups = self._run_json("contacts", "--groups", "--all")
+        self.assertTrue(any(item["display_name"] == "Hidden Group" and item["source"] == "recent_session" for item in all_groups))
+
+        sessions = self._run_json("sessions", "--limit", "3")
+        session_names = [item["chat_name"] for item in sessions]
+        self.assertIn("Hidden Group", session_names)
+        self.assertIn("Carol", session_names)
+        self.assertIn("AI Team", session_names)
 
         history = self._run_json("history", "Alice", "--limit", "10")
         self.assertEqual(history["messages"][0]["text"], "hello from alice")
