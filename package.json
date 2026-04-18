@@ -1,7 +1,7 @@
 {
   "name": "@hsn0918/qq-cli",
-  "version": "0.1.0",
-  "description": "NTQQ database query CLI for local message archives",
+  "version": "0.2.1",
+  "description": "NTQQ database query CLI — sessions, history, contacts, search, stats and more",
   "license": "MIT",
   "os": [
     "darwin"
@@ -41,6 +41,8 @@
     "ntqq",
     "cli",
     "sqlcipher",
+    "chat-history",
+    "search",
     "python",
     "binary"
   ]
