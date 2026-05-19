@@ -231,43 +231,188 @@ def _extract_runtime_key_via_c_scan(db_dir: str, snapshot_dir: str, timeout: int
 
 
 def _find_wrapper_node_path(qq_app: str) -> str | None:
+    version_root = os.path.expanduser(
+        "~/Library/Containers/com.tencent.qq/Data/Library/Application Support/QQ/versions"
+    )
+    candidates = []
+    if os.path.isdir(version_root):
+        for name in os.listdir(version_root):
+            candidate = os.path.join(
+                version_root,
+                name,
+                "QQUpdate.app",
+                "Contents",
+                "Resources",
+                "app",
+                "wrapper.node",
+            )
+            if os.path.isfile(candidate):
+                candidates.append(candidate)
+    if candidates:
+        candidates.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        return candidates[0]
+
     candidate = os.path.join(qq_app, "Contents", "Resources", "app", "wrapper.node")
     return candidate if os.path.isfile(candidate) else None
 
 
-def _find_key_symbol_offline(wrapper_path: str) -> str | None:
-    """Scan wrapper.node on disk (no process needed) to find the symbol that calls sqlite3_key."""
+def _find_key_symbols_offline(wrapper_path: str) -> list[str]:
+    """Scan wrapper.node on disk to find symbols that set the SQLCipher key.
+
+    Locate SetDBKey / nt_sqlite3_key log strings in __cstring, then byte-scan
+    __text for adrp+add pairs whose computed target hits one of those strings,
+    and map each hit back to its containing symbol via LLDB. This avoids
+    disassembling every unnamed_symbol, which on newer wrapper.node builds is
+    too slow. Multiple candidates are returned because 6.9.80 uses a SetDBKey
+    wrapper (v2 ABI) while 6.9.95+ uses nt_sqlite3_key (new ABI); the runtime
+    callback is ABI-aware and probes both layouts.
+    """
     scan_script_source = textwrap.dedent(
         """
         import lldb
+        import struct
         import sys
 
         RESULT_PATH = sys.argv[1] if len(sys.argv) > 1 else "/tmp/qq-cli-sym.txt"
+
+        TARGET_STRINGS = (
+            "SetDBKey sqlite3_key failed",
+            "SetDBKey sqlite3_key failed:{}",
+            "nt_sqlite3_key_v2: db=%p",
+            "nt_sqlite3_key: db=%p",
+        )
+
+
+        def _decode_adrp(instr_word, instr_addr):
+            if (instr_word >> 31) & 1 != 1:
+                return None
+            if (instr_word >> 24) & 0x1F != 0x10:
+                return None
+            immlo = (instr_word >> 29) & 3
+            immhi = (instr_word >> 5) & 0x7FFFF
+            imm21 = (immhi << 2) | immlo
+            if imm21 & (1 << 20):
+                imm21 -= 1 << 21
+            page_base = (instr_addr & ~0xFFF) + (imm21 << 12)
+            rd = instr_word & 0x1F
+            return rd, page_base
+
+
+        def _decode_add_imm(instr_word):
+            if (instr_word >> 23) & 0x1FF != 0b100100010:
+                return None
+            sh = (instr_word >> 22) & 1
+            imm12 = (instr_word >> 10) & 0xFFF
+            if sh:
+                imm12 <<= 12
+            rn = (instr_word >> 5) & 0x1F
+            rd = instr_word & 0x1F
+            return rd, rn, imm12
+
+
+        def _find_subsection(parent, name):
+            for sj in range(parent.GetNumSubSections()):
+                sub = parent.GetSubSectionAtIndex(sj)
+                if sub.GetName() == name:
+                    return sub
+            return None
+
+
+        def _read_section(section):
+            err = lldb.SBError()
+            data = section.GetSectionData()
+            size = data.GetByteSize()
+            raw = bytearray()
+            for off in range(0, size, 65536):
+                chunk_sz = min(65536, size - off)
+                buf = data.ReadRawData(err, off, chunk_sz)
+                if err.Fail():
+                    return None
+                raw.extend(buf)
+            return bytes(raw)
+
 
         def scan_symbols(debugger, command, result, internal_dict):
             target = debugger.GetSelectedTarget()
             if not target.IsValid():
                 return
-            for mi in range(target.GetNumModules()):
-                m = target.GetModuleAtIndex(mi)
-                for si in range(m.GetNumSymbols()):
-                    sym = m.GetSymbolAtIndex(si)
-                    if sym.GetType() != lldb.eSymbolTypeCode:
-                        continue
-                    name = sym.GetName() or ""
-                    if "unnamed_symbol" not in name and "sqlite3_key" not in name:
-                        continue
-                    addr = sym.GetStartAddress()
-                    if not addr.IsValid():
-                        continue
-                    instructions = target.ReadInstructions(addr, 200)
-                    for ii in range(instructions.GetSize()):
-                        inst = instructions.GetInstructionAtIndex(ii)
-                        operands = inst.GetOperands(target) or ""
-                        if "sqlite3_key" in operands:
-                            with open(RESULT_PATH, "w") as f:
-                                f.write(name)
-                            return
+            module = target.GetModuleAtIndex(0)
+            text_outer = module.FindSection("__TEXT")
+            if not text_outer:
+                return
+            text_sub = _find_subsection(text_outer, "__text")
+            cstring_sub = _find_subsection(text_outer, "__cstring")
+            if not text_sub or not cstring_sub:
+                return
+
+            cstring_raw = _read_section(cstring_sub)
+            if cstring_raw is None:
+                return
+            cstring_file_addr = cstring_sub.GetFileAddress()
+
+            str_addr_to_label = {}
+            for label in TARGET_STRINGS:
+                idx = cstring_raw.find(label.encode("utf-8") + b"\\x00")
+                if idx >= 0:
+                    str_addr_to_label[cstring_file_addr + idx] = label
+            if not str_addr_to_label:
+                return
+
+            text_raw = _read_section(text_sub)
+            if text_raw is None:
+                return
+            text_file_addr = text_sub.GetFileAddress()
+            n_words = len(text_raw) // 4
+            words = struct.unpack("<" + "I" * n_words, text_raw[: n_words * 4])
+
+            last_adrp = {}
+            sym_hits = {}
+            for i in range(n_words):
+                w = words[i]
+                addr = text_file_addr + i * 4
+                adrp = _decode_adrp(w, addr)
+                if adrp is not None:
+                    last_adrp[adrp[0]] = (adrp[1], addr)
+                    continue
+                add = _decode_add_imm(w)
+                if add is None:
+                    continue
+                _, rn, imm = add
+                src = last_adrp.get(rn)
+                if not src:
+                    continue
+                tgt = src[0] + imm
+                label = str_addr_to_label.get(tgt)
+                if not label:
+                    continue
+                sb_addr = target.ResolveFileAddress(src[1])
+                symbol = sb_addr.GetSymbol()
+                if not symbol.IsValid():
+                    continue
+                name = symbol.GetName() or ""
+                if not name:
+                    continue
+                entry = sym_hits.setdefault(name, {"labels": set(), "count": 0})
+                entry["labels"].add(label)
+                entry["count"] += 1
+
+            if not sym_hits:
+                return
+
+            def rank(item):
+                name, info = item
+                preferred = 0
+                for idx, label in enumerate(TARGET_STRINGS):
+                    if label in info["labels"]:
+                        preferred = len(TARGET_STRINGS) - idx
+                        break
+                return (preferred, info["count"])
+
+            ordered = sorted(sym_hits.items(), key=rank, reverse=True)
+            with open(RESULT_PATH, "w") as f:
+                for name, _ in ordered:
+                    f.write(name + "\\n")
+
 
         def __lldb_init_module(debugger, internal_dict):
             debugger.HandleCommand("command script add -f scan.scan_symbols qq_cli_scan")
@@ -305,12 +450,13 @@ def _find_key_symbol_offline(wrapper_path: str) -> str | None:
                 timeout=60,
             )
         except Exception:
-            return None
+            return []
 
         if os.path.isfile(result_path):
-            name = open(result_path).read().strip()
-            return name or None
-    return None
+            with open(result_path) as f:
+                names = [ln.strip() for ln in f if ln.strip()]
+            return names
+    return []
 
 
 def _write_lldb_callback(module_path: str, target_db_dir: str, snapshot_dir: str, result_path: str, hits_path: str) -> None:
@@ -422,63 +568,101 @@ def _write_lldb_callback(module_path: str, target_db_dir: str, snapshot_dir: str
             _BP_SET = True
 
 
+        def _try_read_key(process, ptr_hex, len_hex):
+            if not ptr_hex or not len_hex:
+                return None
+            try:
+                ptr = int(ptr_hex, 16)
+                length = int(len_hex, 16)
+            except ValueError:
+                return None
+            if length <= 0 or length > 128:
+                return None
+            data = _read(process, ptr, length)
+            if len(data) != length:
+                return None
+            stripped = data.split(b"\\0", 1)[0]
+            if not stripped:
+                return None
+            if any(b < 0x20 or b > 0x7e for b in stripped):
+                return None
+            return stripped.decode("latin1")
+
+
+        def _walk_sqlite_path(process, x0_hex):
+            if not x0_hex:
+                return ""
+            try:
+                x0 = int(x0_hex, 16)
+            except ValueError:
+                return ""
+            adb = _u64(process, x0 + 0x28)
+            pbt = _u64(process, adb + 8) if adb else 0
+            bts = _u64(process, pbt + 8) if pbt else 0
+            pager = _u64(process, bts) if bts else 0
+            z_filename = _u64(process, pager + 0xD0) if pager else 0
+            return _read_c_string(process, z_filename)
+
+
         def breakpoint_callback(frame, bp_loc, internal_dict):
             process = frame.GetThread().GetProcess()
             regs = {{
                 name: frame.FindRegister(name).GetValue()
                 for name in ("x0", "x1", "x2", "x3")
             }}
-            if not regs["x0"] or not regs["x2"] or not regs["x3"]:
-                return False
 
-            x0 = int(regs["x0"], 16)
-            x2 = int(regs["x2"], 16)
-            x3 = int(regs["x3"], 16)
-            if x3 <= 0 or x3 > 128:
-                return False
+            # v2 ABI (SetDBKey wrapper, 6.9.80): x0=db*, x2=key, x3=len
+            v2_key = _try_read_key(process, regs["x2"], regs["x3"])
+            v2_path = _walk_sqlite_path(process, regs["x0"]) if v2_key else ""
 
-            key_bytes = _read(process, x2, x3)
-            if len(key_bytes) != x3:
-                return False
+            # nt ABI (nt_sqlite3_key, 6.9.95+): x1=key, x2=len, x0 still db*
+            nt_key = _try_read_key(process, regs["x1"], regs["x2"])
+            nt_path = _walk_sqlite_path(process, regs["x0"]) if nt_key else ""
 
-            key = key_bytes.split(b"\\0", 1)[0].decode("latin1", "ignore")
-            if not key:
-                return False
-            if any(ord(ch) < 32 or ord(ch) > 126 for ch in key):
-                return False
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            _append_hit({{
+                "captured_at": now,
+                "v2_key": v2_key,
+                "v2_path": v2_path,
+                "nt_key": nt_key,
+                "nt_path": nt_path,
+            }})
 
-            adb = _u64(process, x0 + 0x28)
-            pbt = _u64(process, adb + 8) if adb else 0
-            bts = _u64(process, pbt + 8) if pbt else 0
-            pager = _u64(process, bts) if bts else 0
-            z_filename = _u64(process, pager + 0xD0) if pager else 0
-            path = _read_c_string(process, z_filename)
+            def _matches_target(path):
+                if not path:
+                    return False
+                try:
+                    return os.path.commonpath([TARGET_DB_DIR, os.path.realpath(path)]) == TARGET_DB_DIR
+                except ValueError:
+                    return False
 
-            info = {{
-                "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "db_path": path,
-                "db_name": os.path.basename(path) if path else "",
-                "key": key,
-                "key_len": len(key),
-                "z_db_name": regs["x1"],
-            }}
-            _append_hit(info)
+            if v2_key and _matches_target(v2_path):
+                with open(RESULT_PATH, "w", encoding="utf-8") as handle:
+                    json.dump({{
+                        "captured_at": now,
+                        "db_path": v2_path,
+                        "db_name": os.path.basename(v2_path),
+                        "key": v2_key,
+                        "key_len": len(v2_key),
+                        "abi": "v2",
+                    }}, handle, ensure_ascii=False, indent=2)
+                    handle.write("\\n")
+                return True
 
-            if not path:
-                return False
+            if nt_key and _matches_target(nt_path):
+                with open(RESULT_PATH, "w", encoding="utf-8") as handle:
+                    json.dump({{
+                        "captured_at": now,
+                        "db_path": nt_path,
+                        "db_name": os.path.basename(nt_path),
+                        "key": nt_key,
+                        "key_len": len(nt_key),
+                        "abi": "nt",
+                    }}, handle, ensure_ascii=False, indent=2)
+                    handle.write("\\n")
+                return True
 
-            try:
-                matched = os.path.commonpath([TARGET_DB_DIR, os.path.realpath(path)]) == TARGET_DB_DIR
-            except ValueError:
-                matched = False
-
-            if not matched:
-                return False
-
-            with open(RESULT_PATH, "w", encoding="utf-8") as handle:
-                json.dump(info, handle, ensure_ascii=False, indent=2)
-                handle.write("\\n")
-            return True
+            return False
         """
     ).strip()
     with open(module_path, "w", encoding="utf-8") as handle:
@@ -486,19 +670,20 @@ def _write_lldb_callback(module_path: str, target_db_dir: str, snapshot_dir: str
         handle.write("\n")
 
 
-def _write_lldb_commands(script_path: str, module_path: str, sym_name: str) -> None:
-    commands = textwrap.dedent(
-        f"""
-        settings set target.process.stop-on-sharedlibrary-events false
-        command script import {module_path}
-        breakpoint set -s wrapper.node -n {sym_name}
-        breakpoint command add -F qq_cli_lldb_hook.breakpoint_callback 1
-        process attach -n QQ --waitfor
-        process continue
-        """
-    ).strip()
+def _write_lldb_commands(script_path: str, module_path: str, sym_names: list[str]) -> None:
+    lines = [
+        "settings set target.process.stop-on-sharedlibrary-events false",
+        f"command script import {module_path}",
+    ]
+    for i, sym in enumerate(sym_names, start=1):
+        lines.append(f"breakpoint set -s wrapper.node -n {sym}")
+        lines.append(f"breakpoint command add -F qq_cli_lldb_hook.breakpoint_callback {i}")
+    lines.extend([
+        "process attach -n QQ --waitfor",
+        "process continue",
+    ])
     with open(script_path, "w", encoding="utf-8") as handle:
-        handle.write(commands)
+        handle.write("\n".join(lines))
         handle.write("\n")
 
 
@@ -517,13 +702,13 @@ def _extract_runtime_key_via_lldb(
     timeout: int,
 ) -> dict:
     # 在启动 LLDB 之前，先离线从磁盘上的 wrapper.node 扫出正确的 symbol 名
-    sym_name = None
+    sym_names: list[str] = []
     wrapper_path = _find_wrapper_node_path(qq_app)
     if wrapper_path:
-        sym_name = _find_key_symbol_offline(wrapper_path)
-    if not sym_name:
-        # 回退到已知的 symbol（QQ 6.9.x arm64）
-        sym_name = "___lldb_unnamed_symbol372387"
+        sym_names = _find_key_symbols_offline(wrapper_path)
+    if not sym_names:
+        # 回退到已知的 symbol（QQ 6.9.x arm64 老版本）
+        sym_names = ["___lldb_unnamed_symbol372387"]
 
     # 杀掉已有的 QQ 进程（保证断点能在启动期触发）
     _kill_running_qq()
@@ -535,7 +720,7 @@ def _extract_runtime_key_via_lldb(
         hits_path = os.path.join(work_dir, "hits.jsonl")
 
         _write_lldb_callback(module_path, target_db_dir, snapshot_dir, result_path, hits_path)
-        _write_lldb_commands(script_path, module_path, sym_name)
+        _write_lldb_commands(script_path, module_path, sym_names)
 
         # LLDB 先启动，用 --waitfor 等待 QQ 进程出现后立刻 attach
         proc = subprocess.Popen(
@@ -550,34 +735,44 @@ def _extract_runtime_key_via_lldb(
         time.sleep(3)
         subprocess.Popen(["open", qq_app])
 
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.communicate()
-            raise RuntimeError(
-                "等待 QQ 打开用户数据库超时。\n"
-                "请登录 QQ 后重试 qq-cli init。"
-            )
+        deadline = time.monotonic() + max(1, timeout)
+        result_payload = None
+        while time.monotonic() < deadline:
+            if os.path.exists(result_path):
+                try:
+                    with open(result_path, encoding="utf-8") as handle:
+                        result_payload = json.load(handle)
+                except (OSError, json.JSONDecodeError):
+                    result_payload = None
+                if result_payload:
+                    break
+            if proc.poll() is not None:
+                break
+            time.sleep(0.5)
 
-        if os.path.exists(result_path):
-            with open(result_path, encoding="utf-8") as handle:
-                payload = json.load(handle)
+        if proc.poll() is None:
+            proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
+
+        if result_payload:
             # Snapshot happens here — delay so QQ finishes startup and WAL checkpoints
             time.sleep(30)
             _copy_snapshot_dir(target_db_dir, snapshot_dir)
-            payload["snapshot_dir"] = snapshot_dir
-            payload["stdout"] = stdout
-            payload["stderr"] = stderr
-            payload["method"] = "lldb"
-            payload["waited_for_checkpoint"] = True
-            return payload
+            result_payload["snapshot_dir"] = snapshot_dir
+            result_payload["stdout"] = stdout
+            result_payload["stderr"] = stderr
+            result_payload["method"] = "lldb"
+            result_payload["waited_for_checkpoint"] = True
+            return result_payload
 
         combined = ((stdout or "") + "\n" + (stderr or "")).strip()
         hits_tail = _tail_text(hits_path, limit=8)
         detail = combined[-2000:] if combined else "无"
         raise RuntimeError(
-            "未能在启动期捕获目标 nt_db 的运行时 key。\n"
+            "等待 QQ 打开用户数据库超时。\n"
             f"目标目录: {target_db_dir}\n"
             f"最近命中:\n{hits_tail or '无'}\n"
             f"LLDB 输出:\n{detail}"
